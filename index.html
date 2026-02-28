@@ -842,16 +842,18 @@
 
                 const verification = this.verifyScheduleXNPV(schedule, frequency);
 
+                const numberOfInstallments = numberOfYears * frequency;
                 return {
                     pattern: 'equal',
                     patternName: 'نظام القسط الموحد',
                     downPayment,
                     installmentAmount,
-                    numberOfInstallments: quarterlyDates.length,
+                    numberOfInstallments,
                     annualPayments: annualPayments.length,
                     semiannualPayments: semiannualPayments.length,
                     quarterlyPayments: quarterlyPayments.length,
                     frequency,
+                    distributeUnitValue,
                     schedule,
                     verification,
                     summary: this.calculateSummary(schedule)
@@ -2369,7 +2371,35 @@
                 try {
                     switch (selectedPattern) {
                         case 'equal':
-                            result = engine.calculateEqualInstallments({ ...commonParams, distributeUnitValue: true });
+                            // التحقق: هل المدخلات تطابق النظام الأساسي؟
+                            // لو نعم → الإجمالي = سعر الوحدة | لو لا → حساب PV-based
+                            let isBaseSystemMatch = false;
+                            if (project.baseSystem) {
+                                const bs = project.baseSystem;
+                                const baseFrequency = bs.frequency || 4; // التردد الأساسي (default: ربع سنوي)
+                                const bsDP = bs.downPaymentIsPercentage ? unitValue * (bs.downPaymentValue / 100) : bs.downPaymentValue;
+                                const bsAnnuals = (bs.annualPayments || []).map(p => p.isPercentage ? unitValue * (p.value / 100) : p.value);
+                                const bsSemiannuals = (bs.semiannualPayments || []).map(p => p.isPercentage ? unitValue * (p.value / 100) : p.value);
+                                const bsQuarterlies = (bs.quarterlyPayments || []).map(p => p.isPercentage ? unitValue * (p.value / 100) : p.value);
+                                
+                                const currentAnnualAmounts = annualPaymentsProcessed.map(p => p.amount);
+                                const currentSemiannualAmounts = semiannualPaymentsProcessed.map(p => p.amount);
+                                const currentQuarterlyAmounts = quarterlyPaymentsProcessed.map(p => p.amount);
+                                
+                                const dpMatch = Math.abs(downPayment - bsDP) < 1;
+                                const yearsMatch = numberOfYears === bs.quarterlyYears;
+                                const freqMatch = frequency === baseFrequency;
+                                const annualMatch = bsAnnuals.length === currentAnnualAmounts.length && 
+                                    bsAnnuals.every((v, i) => Math.abs(v - currentAnnualAmounts[i]) < 1);
+                                const semiMatch = bsSemiannuals.length === currentSemiannualAmounts.length &&
+                                    bsSemiannuals.every((v, i) => Math.abs(v - currentSemiannualAmounts[i]) < 1);
+                                const qMatch = bsQuarterlies.length === currentQuarterlyAmounts.length &&
+                                    bsQuarterlies.every((v, i) => Math.abs(v - currentQuarterlyAmounts[i]) < 1);
+                                
+                                isBaseSystemMatch = dpMatch && yearsMatch && freqMatch && annualMatch && semiMatch && qMatch;
+                            }
+                            
+                            result = engine.calculateEqualInstallments({ ...commonParams, distributeUnitValue: isBaseSystemMatch });
                             break;
                         case 'decreasing':
                             result = engine.calculateDecreasingPayments({ ...commonParams, decreaseRate });
@@ -2399,8 +2429,8 @@
                     // تطبيق التقريب التلقائي (لأقرب 100 ج) على الأقساط الدورية 
                     let finalSchedule;
                     
-                    if (selectedPattern === 'equal') {
-                        // القسط الموحد: تقريب مع الحفاظ على الإجمالي = سعر الوحدة
+                    if (selectedPattern === 'equal' && result.distributeUnitValue) {
+                        // النظام الأساسي: تقريب مع الحفاظ على الإجمالي = سعر الوحدة
                         finalSchedule = result.schedule.map(payment => {
                             if (payment.type === 'مقدم' || payment.type.includes('دفعة')) return payment;
                             const roundedAmount = Math.ceil(payment.amount / 100) * 100;
@@ -3850,7 +3880,7 @@
                         {/* Footer */}
                         <div className="text-center text-gray-600 text-sm mt-8 pb-8 print-hidden">
                             <p className="font-bold text-red-600 text-lg">شركة بيتا للتطوير العقاري</p>
-                            <p className="mt-1">BETA SMART FINANCE | نظام التقسيط المرن -AMR ALTAMAWI</p>
+                            <p className="mt-1">BETA SMART FINANCE | نظام التقسيط المرن - دقة عالية - AMR ALTAMAWI</p>
                             <p className="mt-1 text-xs text-gray-400">
                                 {dbReady ? '🗄️ SQLite Database Active' : '💾 localStorage Mode'}
                                 {dbStats.calculationCount > 0 && ` | ${dbStats.calculationCount} عملية محفوظة`}
