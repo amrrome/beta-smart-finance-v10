@@ -686,12 +686,14 @@
                     semiannualPayments = [],
                     quarterlyPayments = [],
                     quarterlyStartDate = null,
-                    installmentDay = 1 // يوم استحقاق القسط (1 أو 15)
+                    installmentDay = 1, // يوم استحقاق القسط (1 أو 15)
+                    distributeUnitValue = false // توزيع سعر الوحدة بدل Cash Value
                 } = params;
                 
                 const basePaymentDate = downPaymentDate || this.baseDate;
                 
                 let knownPV = downPayment;
+                let knownAmount = downPayment; // للتوزيع المباشر
                 const schedule = [{
                     id: 0,
                     type: 'مقدم',
@@ -710,6 +712,7 @@
                     
                     const pv = this.calculatePVWithDate(amount, paymentDate);
                     knownPV += pv;
+                    knownAmount += amount;
                     
                     schedule.push({
                         id: paymentId++,
@@ -728,6 +731,7 @@
                     
                     const pv = this.calculatePVWithDate(amount, paymentDate);
                     knownPV += pv;
+                    knownAmount += amount;
                     
                     schedule.push({
                         id: paymentId++,
@@ -746,6 +750,7 @@
                     
                     const pv = this.calculatePVWithDate(amount, paymentDate);
                     knownPV += pv;
+                    knownAmount += amount;
                     
                     schedule.push({
                         id: paymentId++,
@@ -757,47 +762,83 @@
                     });
                 });
 
-                const remainingPV = this.cashValue - knownPV;
-                
-                // حماية: التحقق من أن القيمة المتبقية موجبة
-                if (remainingPV <= 0) {
-                    throw new Error(`⚠️ الدفعات المعروفة (${knownPV.toLocaleString('ar-EG')} ج) تتجاوز قيمة الكاش (${this.cashValue.toLocaleString('ar-EG')} ج). يرجى تقليل المقدم أو الدفعات الإضافية.`);
-                }
-                
-                // حساب الفترة الزمنية بين الأقساط بالشهور
-                const monthsInterval = 12 / frequency; // ✅ التصحيح
-                
-                // تحديد تاريخ بدء الأقساط مع ضبط اليوم دائماً على اليوم المختار
-                let startDate;
-                if (quarterlyStartDate) {
-                    // حتى لو كان التاريخ محدداً، نأخذ الشهر والسنة فقط ونضبط اليوم
-                    const tempDate = new Date(quarterlyStartDate);
-                    // ضبط الوقت على الظهر لتجنب مشاكل timezone
-                    startDate = new Date(tempDate.getFullYear(), tempDate.getMonth(), installmentDay, 12, 0, 0);
-                } else {
-                    // يتم بدء القسط الأول بعد فترة الأقساط بناءً على التردد
-                    startDate = this.addMonthsWithDay(basePaymentDate, monthsInterval, installmentDay); // ✅ استخدام المتغير
-                }
-                
-                const numberOfQuarters = numberOfYears * frequency;
-                const quarterlyDates = [];
-                for (let i = 0; i < numberOfQuarters; i++) {
-                    quarterlyDates.push(this.addMonthsWithDay(startDate, i * (12 / frequency), installmentDay));
-                }
+                let remainingPV, installmentAmount;
 
-                const installmentAmount = this.findEqualInstallmentXNPV(remainingPV, quarterlyDates, frequency);
+                if (distributeUnitValue) {
+                    // ═══ توزيع سعر الوحدة: الإجمالي المدفوع = سعر الوحدة ═══
+                    const remainingAmount = this.unitValue - knownAmount;
+                    if (remainingAmount <= 0) {
+                        throw new Error(`⚠️ الدفعات المعروفة تتجاوز سعر الوحدة.`);
+                    }
+                    remainingPV = this.cashValue - knownPV; // for reference only
+                    
+                    const monthsInterval = 12 / frequency;
+                    let startDate;
+                    if (quarterlyStartDate) {
+                        const tempDate = new Date(quarterlyStartDate);
+                        startDate = new Date(tempDate.getFullYear(), tempDate.getMonth(), installmentDay, 12, 0, 0);
+                    } else {
+                        startDate = this.addMonthsWithDay(basePaymentDate, monthsInterval, installmentDay);
+                    }
+                    
+                    const numberOfQuarters = numberOfYears * frequency;
+                    const quarterlyDates = [];
+                    for (let i = 0; i < numberOfQuarters; i++) {
+                        quarterlyDates.push(this.addMonthsWithDay(startDate, i * (12 / frequency), installmentDay));
+                    }
 
-                quarterlyDates.forEach((date, index) => {
-                    const pv = this.calculatePVPeriodic(installmentAmount, index + 1, frequency);
-                    schedule.push({
-                        id: paymentId++,
-                        type: `قسط موحد ${index + 1}`,
-                        date: this.formatDateLocal(date),
-                        amount: installmentAmount,
-                        pv,
-                        discount: installmentAmount - pv
+                    installmentAmount = remainingAmount / numberOfQuarters;
+
+                    quarterlyDates.forEach((date, index) => {
+                        const pv = this.calculatePVPeriodic(installmentAmount, index + 1, frequency);
+                        schedule.push({
+                            id: paymentId++,
+                            type: `قسط موحد ${index + 1}`,
+                            date: this.formatDateLocal(date),
+                            amount: installmentAmount,
+                            pv,
+                            discount: installmentAmount - pv
+                        });
                     });
-                });
+
+                } else {
+                    // ═══ حساب PV-based (الأسلوب القياسي) ═══
+                    remainingPV = this.cashValue - knownPV;
+                
+                    if (remainingPV <= 0) {
+                        throw new Error(`⚠️ الدفعات المعروفة (${knownPV.toLocaleString('ar-EG')} ج) تتجاوز قيمة الكاش (${this.cashValue.toLocaleString('ar-EG')} ج). يرجى تقليل المقدم أو الدفعات الإضافية.`);
+                    }
+                
+                    const monthsInterval = 12 / frequency;
+                
+                    let startDate;
+                    if (quarterlyStartDate) {
+                        const tempDate = new Date(quarterlyStartDate);
+                        startDate = new Date(tempDate.getFullYear(), tempDate.getMonth(), installmentDay, 12, 0, 0);
+                    } else {
+                        startDate = this.addMonthsWithDay(basePaymentDate, monthsInterval, installmentDay);
+                    }
+                
+                    const numberOfQuarters = numberOfYears * frequency;
+                    const quarterlyDates = [];
+                    for (let i = 0; i < numberOfQuarters; i++) {
+                        quarterlyDates.push(this.addMonthsWithDay(startDate, i * (12 / frequency), installmentDay));
+                    }
+
+                    installmentAmount = this.findEqualInstallmentXNPV(remainingPV, quarterlyDates, frequency);
+
+                    quarterlyDates.forEach((date, index) => {
+                        const pv = this.calculatePVPeriodic(installmentAmount, index + 1, frequency);
+                        schedule.push({
+                            id: paymentId++,
+                            type: `قسط موحد ${index + 1}`,
+                            date: this.formatDateLocal(date),
+                            amount: installmentAmount,
+                            pv,
+                            discount: installmentAmount - pv
+                        });
+                    });
+                }
 
                 const verification = this.verifyScheduleXNPV(schedule, frequency);
 
@@ -1283,6 +1324,7 @@
                 const downPaymentDate = baseSystemConfig.downPaymentDate 
                     ? new Date(baseSystemConfig.downPaymentDate) 
                     : this.baseDate;
+                const installmentDay = 1;
 
                 const downPayment = baseSystemConfig.downPaymentIsPercentage 
                     ? unitValue * (baseSystemConfig.downPaymentValue / 100)
@@ -1306,16 +1348,105 @@
                     date: p.date ? new Date(p.date) : null
                 }));
 
-                return this.calculateEqualInstallments({
-                    downPayment,
-                    downPaymentDate,
-                    numberOfYears: baseSystemConfig.quarterlyYears,
-                    frequency: 4,
-                    annualPayments,
-                    semiannualPayments,
-                    quarterlyPayments,
-                    quarterlyStartDate: null
+                // ═══ النظام الأساسي: توزيع سعر الوحدة (وليس Cash Value) ═══
+                // الإجمالي المدفوع = سعر الوحدة بالضبط
+                // المقدم والدفعات كنسب من سعر الوحدة، والباقي يوزع بالتساوي
+                
+                let knownAmount = downPayment; // المبالغ المعروفة من سعر الوحدة
+                const schedule = [{
+                    id: 0,
+                    type: 'مقدم',
+                    date: this.formatDateLocal(downPaymentDate),
+                    amount: downPayment,
+                    pv: downPayment,
+                    discount: 0
+                }];
+                let paymentId = 1;
+
+                annualPayments.forEach((payment, index) => {
+                    const paymentDate = payment.date ? new Date(new Date(payment.date).setHours(12, 0, 0)) : this.addMonthsWithDay(downPaymentDate, (index + 1) * 12, installmentDay);
+                    const pv = this.calculatePVWithDate(payment.amount, paymentDate);
+                    knownAmount += payment.amount;
+                    schedule.push({
+                        id: paymentId++,
+                        type: payment.type || `دفعة سنوية ${index + 1}`,
+                        date: this.formatDateLocal(paymentDate),
+                        amount: payment.amount,
+                        pv,
+                        discount: payment.amount - pv
+                    });
                 });
+
+                semiannualPayments.forEach((payment, index) => {
+                    const paymentDate = payment.date ? new Date(new Date(payment.date).setHours(12, 0, 0)) : this.addMonthsWithDay(downPaymentDate, (index + 1) * 6, installmentDay);
+                    const pv = this.calculatePVWithDate(payment.amount, paymentDate);
+                    knownAmount += payment.amount;
+                    schedule.push({
+                        id: paymentId++,
+                        type: payment.type || `دفعة نصف سنوية ${index + 1}`,
+                        date: this.formatDateLocal(paymentDate),
+                        amount: payment.amount,
+                        pv,
+                        discount: payment.amount - pv
+                    });
+                });
+
+                quarterlyPayments.forEach((payment, index) => {
+                    const paymentDate = payment.date ? new Date(new Date(payment.date).setHours(12, 0, 0)) : this.addMonthsWithDay(downPaymentDate, (index + 1) * 3, installmentDay);
+                    const pv = this.calculatePVWithDate(payment.amount, paymentDate);
+                    knownAmount += payment.amount;
+                    schedule.push({
+                        id: paymentId++,
+                        type: payment.type || `دفعة ربع سنوية ${index + 1}`,
+                        date: this.formatDateLocal(paymentDate),
+                        amount: payment.amount,
+                        pv,
+                        discount: payment.amount - pv
+                    });
+                });
+
+                // الباقي من سعر الوحدة يوزع بالتساوي على الأقساط
+                const remainingAmount = unitValue - knownAmount;
+                const frequency = 4; // quarterly
+                const monthsInterval = 12 / frequency;
+                const startDate = this.addMonthsWithDay(downPaymentDate, monthsInterval, installmentDay);
+                const numberOfQuarters = baseSystemConfig.quarterlyYears * frequency;
+                const quarterlyDates = [];
+                for (let i = 0; i < numberOfQuarters; i++) {
+                    quarterlyDates.push(this.addMonthsWithDay(startDate, i * monthsInterval, installmentDay));
+                }
+
+                // القسط = المتبقي من سعر الوحدة ÷ عدد الأقساط
+                const installmentAmount = remainingAmount / numberOfQuarters;
+
+                quarterlyDates.forEach((date, index) => {
+                    const pv = this.calculatePVPeriodic(installmentAmount, index + 1, frequency);
+                    schedule.push({
+                        id: paymentId++,
+                        type: `قسط موحد ${index + 1}`,
+                        date: this.formatDateLocal(date),
+                        amount: installmentAmount,
+                        pv,
+                        discount: installmentAmount - pv
+                    });
+                });
+
+                const verification = this.verifyScheduleXNPV(schedule, frequency);
+
+                return {
+                    pattern: 'equal',
+                    patternName: 'النظام الأساسي',
+                    downPayment,
+                    installmentAmount,
+                    numberOfInstallments: numberOfQuarters,
+                    annualPayments: annualPayments.length,
+                    semiannualPayments: semiannualPayments.length,
+                    quarterlyPayments: quarterlyPayments.length,
+                    frequency,
+                    schedule,
+                    verification,
+                    summary: this.calculateSummary(schedule)
+                };
             }
 
             // ═══ IMPLIED DISCOUNT RATE ═══
@@ -2238,7 +2369,7 @@
                 try {
                     switch (selectedPattern) {
                         case 'equal':
-                            result = engine.calculateEqualInstallments(commonParams);
+                            result = engine.calculateEqualInstallments({ ...commonParams, distributeUnitValue: true });
                             break;
                         case 'decreasing':
                             result = engine.calculateDecreasingPayments({ ...commonParams, decreaseRate });
@@ -2266,11 +2397,53 @@
                     }
 
                     // تطبيق التقريب التلقائي (لأقرب 100 ج) على الأقساط الدورية 
-                    let finalSchedule = applyAutoRoundingToSchedule(result.schedule);
-
-                    // تطبيق التقريب الإضافي للمدير
-                    if (isAdmin && roundingOption !== '100') {
-                        finalSchedule = applyRoundingToSchedule(finalSchedule, roundingOption);
+                    let finalSchedule;
+                    
+                    if (selectedPattern === 'equal') {
+                        // القسط الموحد: تقريب مع الحفاظ على الإجمالي = سعر الوحدة
+                        finalSchedule = result.schedule.map(payment => {
+                            if (payment.type === 'مقدم' || payment.type.includes('دفعة')) return payment;
+                            const roundedAmount = Math.ceil(payment.amount / 100) * 100;
+                            return { ...payment, amount: roundedAmount, discount: roundedAmount - payment.pv };
+                        });
+                        
+                        // تعديل القسط الأخير ليكون الإجمالي = سعر الوحدة بالضبط
+                        const totalBeforeLast = finalSchedule.slice(0, -1).reduce((s, p) => s + p.amount, 0);
+                        const lastIdx = finalSchedule.length - 1;
+                        const adjustedLast = unitValue - totalBeforeLast;
+                        if (adjustedLast > 0 && lastIdx > 0) {
+                            finalSchedule[lastIdx] = {
+                                ...finalSchedule[lastIdx],
+                                amount: adjustedLast,
+                                discount: adjustedLast - finalSchedule[lastIdx].pv
+                            };
+                        }
+                        
+                        // تطبيق التقريب الإضافي للمدير (مع نفس المنطق)
+                        if (isAdmin && roundingOption !== '100') {
+                            const roundVal = parseInt(roundingOption);
+                            finalSchedule = finalSchedule.map(payment => {
+                                if (payment.type === 'مقدم' || payment.type.includes('دفعة')) return payment;
+                                const roundedAmount = Math.ceil(payment.amount / roundVal) * roundVal;
+                                return { ...payment, amount: roundedAmount, discount: roundedAmount - payment.pv };
+                            });
+                            const totalBeforeLast2 = finalSchedule.slice(0, -1).reduce((s, p) => s + p.amount, 0);
+                            const lastIdx2 = finalSchedule.length - 1;
+                            const adjustedLast2 = unitValue - totalBeforeLast2;
+                            if (adjustedLast2 > 0 && lastIdx2 > 0) {
+                                finalSchedule[lastIdx2] = {
+                                    ...finalSchedule[lastIdx2],
+                                    amount: adjustedLast2,
+                                    discount: adjustedLast2 - finalSchedule[lastIdx2].pv
+                                };
+                            }
+                        }
+                    } else {
+                        // الأنظمة الأخرى: تقريب عادي
+                        finalSchedule = applyAutoRoundingToSchedule(result.schedule);
+                        if (isAdmin && roundingOption !== '100') {
+                            finalSchedule = applyRoundingToSchedule(finalSchedule, roundingOption);
+                        }
                     }
                     
                     // إعادة حساب الملخص والتحقق بناءً على الجدول المقرب
@@ -2302,10 +2475,27 @@
                         );
                         let baseResult = baseEngine.calculateBaseSystem(project.baseSystem, unitValue);
 
-                         // تطبيق نفس التقريب على النظام الأساسي
-                        let baseFinalSchedule = applyAutoRoundingToSchedule(baseResult.schedule);
-                        if (isAdmin && roundingOption !== '100') {
-                            baseFinalSchedule = applyRoundingToSchedule(baseFinalSchedule, roundingOption);
+                        // النظام الأساسي: التقريب مع الحفاظ على الإجمالي = سعر الوحدة
+                        let baseFinalSchedule = baseResult.schedule.map((payment, idx) => {
+                            // لا نقرّب المقدم والدفعات المعروفة (نسب من سعر الوحدة)
+                            if (payment.type === 'مقدم' || payment.type.includes('دفعة')) {
+                                return payment;
+                            }
+                            // تقريب الأقساط لأقرب 100
+                            const roundedAmount = Math.ceil(payment.amount / 100) * 100;
+                            return { ...payment, amount: roundedAmount, discount: roundedAmount - payment.pv };
+                        });
+
+                        // تعديل القسط الأخير ليكون الإجمالي = سعر الوحدة بالضبط
+                        const baseTotalBeforeLast = baseFinalSchedule.slice(0, -1).reduce((s, p) => s + p.amount, 0);
+                        const lastIdx = baseFinalSchedule.length - 1;
+                        const adjustedLastAmount = unitValue - baseTotalBeforeLast;
+                        if (adjustedLastAmount > 0) {
+                            baseFinalSchedule[lastIdx] = {
+                                ...baseFinalSchedule[lastIdx],
+                                amount: adjustedLastAmount,
+                                discount: adjustedLastAmount - baseFinalSchedule[lastIdx].pv
+                            };
                         }
                         
                         baseResult.schedule = baseFinalSchedule;
@@ -3660,7 +3850,7 @@
                         {/* Footer */}
                         <div className="text-center text-gray-600 text-sm mt-8 pb-8 print-hidden">
                             <p className="font-bold text-red-600 text-lg">شركة بيتا للتطوير العقاري</p>
-                            <p className="mt-1">BETA SMART FINANCE | نظام التقسيط المرن - دقة عالية - خدمة متميزة</p>
+                            <p className="mt-1">BETA SMART FINANCE | نظام التقسيط المرن -AMR ALTAMAWI</p>
                             <p className="mt-1 text-xs text-gray-400">
                                 {dbReady ? '🗄️ SQLite Database Active' : '💾 localStorage Mode'}
                                 {dbStats.calculationCount > 0 && ` | ${dbStats.calculationCount} عملية محفوظة`}
