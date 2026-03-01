@@ -984,19 +984,22 @@
                     quarterlyDates.push(this.addMonthsWithDay(startDate, i * (12 / frequency), installmentDay));
                 }
 
-                const baseInstallment = this.findBaseInstallmentDecreasing(remainingPV, quarterlyDates, decreaseRate / 100);
+                const baseInstallment = this.findBaseInstallmentDecreasing(remainingPV, quarterlyDates, decreaseRate / 100, frequency);
 
                 // حماية: التحقق من أن القسط الأساسي موجب
                 if (remainingPV <= 0 || baseInstallment <= 0) {
                     throw new Error(`⚠️ الدفعات المعروفة تتجاوز قيمة الكاش. يرجى تقليل المقدم أو الدفعات الإضافية.`);
                 }
 
+                const freqLabel = frequency === 4 ? 'ربع سنوي' : frequency === 2 ? 'نصف سنوي' : 'سنوي';
                 quarterlyDates.forEach((date, index) => {
-                    const amount = baseInstallment * Math.pow(1 - decreaseRate / 100, index);
+                    const yearIndex = Math.floor(index / frequency);
+                    const periodInYear = (index % frequency) + 1;
+                    const amount = baseInstallment * Math.pow(1 - decreaseRate / 100, yearIndex);
                     const pv = this.calculatePVWithDate(amount, date);
                     schedule.push({
                         id: paymentId++,
-                        type: `قسط متناقص ${index + 1}`,
+                        type: `قسط متناقص - سنة ${yearIndex + 1} / ${freqLabel} ${periodInYear}`,
                         date: this.formatDateLocal(date),
                         amount,
                         pv,
@@ -1023,7 +1026,7 @@
                 };
             }
 
-            findBaseInstallmentDecreasing(targetPV, dates, decreaseRate) {
+            findBaseInstallmentDecreasing(targetPV, dates, decreaseRate, frequency) {
                 let low = 0, high = targetPV * 2, tolerance = 0.01;
                 const maxIterations = 200;
                 let iterations = 0;
@@ -1033,7 +1036,8 @@
                     
                     let calculatedPV = 0;
                     for (let i = 0; i < dates.length; i++) {
-                        const amount = mid * Math.pow(1 - decreaseRate, i);
+                        const yearIndex = Math.floor(i / frequency);
+                        const amount = mid * Math.pow(1 - decreaseRate, yearIndex);
                         calculatedPV += this.calculatePVWithDate(amount, dates[i]);
                     }
                     
@@ -1145,19 +1149,22 @@
                     quarterlyDates.push(this.addMonthsWithDay(startDate, i * (12 / frequency), installmentDay));
                 }
 
-                const baseInstallment = this.findBaseInstallmentGraduated(remainingPV, quarterlyDates, growthRate / 100);
+                const baseInstallment = this.findBaseInstallmentGraduated(remainingPV, quarterlyDates, growthRate / 100, frequency);
 
                 // حماية: التحقق من أن القسط الأساسي موجب
                 if (remainingPV <= 0 || baseInstallment <= 0) {
                     throw new Error(`⚠️ الدفعات المعروفة تتجاوز قيمة الكاش. يرجى تقليل المقدم أو الدفعات الإضافية.`);
                 }
 
+                const freqLabelG = frequency === 4 ? 'ربع سنوي' : frequency === 2 ? 'نصف سنوي' : 'سنوي';
                 quarterlyDates.forEach((date, index) => {
-                    const amount = baseInstallment * Math.pow(1 + growthRate / 100, index);
+                    const yearIndex = Math.floor(index / frequency);
+                    const periodInYear = (index % frequency) + 1;
+                    const amount = baseInstallment * Math.pow(1 + growthRate / 100, yearIndex);
                     const pv = this.calculatePVWithDate(amount, date);
                     schedule.push({
                         id: paymentId++,
-                        type: `قسط متزايد ${index + 1}`,
+                        type: `قسط متزايد - سنة ${yearIndex + 1} / ${freqLabelG} ${periodInYear}`,
                         date: this.formatDateLocal(date),
                         amount,
                         pv,
@@ -1184,7 +1191,7 @@
                 };
             }
 
-            findBaseInstallmentGraduated(targetPV, dates, growthRate) {
+            findBaseInstallmentGraduated(targetPV, dates, growthRate, frequency) {
                 let low = 0, high = targetPV * 2, tolerance = 0.01;
                 const maxIterations = 200;
                 let iterations = 0;
@@ -1194,7 +1201,8 @@
                     
                     let calculatedPV = 0;
                     for (let i = 0; i < dates.length; i++) {
-                        const amount = mid * Math.pow(1 + growthRate, i);
+                        const yearIndex = Math.floor(i / frequency);
+                        const amount = mid * Math.pow(1 + growthRate, yearIndex);
                         calculatedPV += this.calculatePVWithDate(amount, dates[i]);
                     }
                     
@@ -3887,7 +3895,7 @@
                         {/* Footer */}
                         <div className="text-center text-gray-600 text-sm mt-8 pb-8 print-hidden">
                             <p className="font-bold text-red-600 text-lg">شركة بيتا للتطوير العقاري</p>
-                            <p className="mt-1">BETA SMART FINANCE | نظام التقسيط المرن - دقة عالية - DR.ALTAMAWI</p>
+                            <p className="mt-1">BETA SMART FINANCE | نظام التقسيط المرن - DR. AMR ALTAMAWI</p>
                             <p className="mt-1 text-xs text-gray-400">
                                 {dbReady ? '🗄️ SQLite Database Active' : '💾 localStorage Mode'}
                                 {dbStats.calculationCount > 0 && ` | ${dbStats.calculationCount} عملية محفوظة`}
